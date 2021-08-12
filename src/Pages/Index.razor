@@ -1,0 +1,362 @@
+@page "/"
+
+@using CurrieTechnologies.Razor.Clipboard
+@using LiteDB
+@inject ClipboardService clipboardService
+@inject Blazored.LocalStorage.ILocalStorageService localStorageService
+@using System.ComponentModel
+@inject NavigationManager NavigationManager
+@using Microsoft.AspNetCore.SignalR.Client
+@using CloudClipboard.Data
+@using System.Collections.Generic
+@using System.Text.RegularExpressions
+@using Blazorise.DataGrid
+@using CloudClipboard.Hubs
+@using System
+@using System.Threading
+
+<Layout>
+    <LayoutHeader>
+        <Fields>
+            <Field ColumnSize="ColumnSize.Is5.OnDesktop.Is2.OnMobile" />
+            <Field ColumnSize="ColumnSize.Is2.OnDesktop.Is8.OnMobile" TextAlignment="TextAlignment.Center">
+                <Heading Size="HeadingSize.Is1" TextAlignment="TextAlignment.Center">CloudClipboard</Heading>
+            </Field>
+            <Field ColumnSize="ColumnSize.Is5.OnDesktop.Is2.OnMobile">
+                <Button Color="Color.Light" Clicked="@(() => ClearLoginInfo())" Display="isLoggingInShowing">登出</Button>
+            </Field>
+        </Fields>
+    </LayoutHeader>
+    <LayoutContent>
+        <Fields Display="@isLoggingInShowing">
+            <Field ColumnSize="ColumnSize.Is4.OnDesktop.Is1.OnMobile" />
+            <Field ColumnSize="ColumnSize.Is4.OnDesktop.Is10.OnMobile" TextAlignment="TextAlignment.Center">
+                <Tooltip Text="新增到雲端剪貼簿">
+                    <Button Color="Color.Primary" Clicked="@(() => PasteTextContentToCloudClipboard())" Disabled="@isLoggingOut" Loading="@isPasteToCloudClipboardButtonLoading">
+                        <LoadingTemplate>
+                            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true" />
+                        </LoadingTemplate>
+                        <ChildContent>
+                            <Icon Name="@("fa-cloud-upload-alt")" />
+                        </ChildContent>
+                    </Button>
+                </Tooltip>
+            </Field>
+            <Fields ColumnSize="ColumnSize.Is4.OnDesktop.Is1.OnMobile" />
+        </Fields>
+        <Fields Display="@hasDataShowing">
+            <Field ColumnSize="ColumnSize.Is4.OnDesktop.Is1.OnMobile" />
+            <Field ColumnSize="ColumnSize.Is4.OnDesktop.Is10.OnMobile" TextAlignment="TextAlignment.Center">
+                <DataGrid TItem="ClipboardRecord" Data="@clipboardRecordList" Bordered="@true" RowSelectable="@((item) => false)">
+                    <ChildContent>
+                        <DataGridColumn TextAlignment="TextAlignment.Center" TItem="ClipboardRecord" Field="@nameof(ClipboardRecord.TextContent)" Width="10%" Caption="動作" Sortable="@false">
+                            <DisplayTemplate>
+                                <Tooltip Text="複製到本地剪貼簿">
+                                    <Button Style="width:46px" Color="Color.Success" Clicked="@(() => CopyTextContentToLocalClipboard((context as ClipboardRecord)))" Loading="@isCopyToLocalClipboardButtonLoading[context.RowID]">
+                                        <LoadingTemplate>
+                                            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true" />
+                                        </LoadingTemplate>
+                                        <ChildContent>
+                                            <Icon Name="@("fa-clipboard")" />
+                                        </ChildContent>
+                                    </Button>
+                                </Tooltip>
+                            </DisplayTemplate>
+                        </DataGridColumn>
+                        <DataGridColumn TItem="ClipboardRecord" Field="@nameof(ClipboardRecord.TextContent)" Caption="剪貼簿文字" Width="90%" Sortable="@false">
+                            <DisplayTemplate>
+                                <Link Clicked="@(() => OpenLongTextContentDialog(context as ClipboardRecord))">
+                                    <Div Style="width:500px" Overflow="Overflow.Hidden" TextOverflow="TextOverflow.Truncate">
+                                        @context.TextContent
+                                    </Div>
+                                </Link>
+                            </DisplayTemplate>
+                        </DataGridColumn>
+                    </ChildContent>
+                </DataGrid>
+            </Field>
+            <Fields ColumnSize="ColumnSize.Is4.OnDesktop.Is1.OnMobile" />
+        </Fields>
+        <Fields Display="@hasNoDataShowing">
+            <Field ColumnSize="ColumnSize.Is4.OnDesktop.Is1.OnMobile" />
+            <Field ColumnSize="ColumnSize.Is4.OnDesktop.Is10.OnMobile" TextAlignment="TextAlignment.Center">
+                <Field>
+                    <div class="box">
+                        <div>
+                            <img src="images/paste-clipboard.png" style="width:200px;filter:brightness(2)" />
+                        </div>
+                        <div>
+                            未複製任何文字
+                        </div>
+                    </div>
+                </Field>
+            </Field>
+            <Field ColumnSize="ColumnSize.Is4.OnDesktop.Is1.OnMobile" />
+        </Fields>
+    </LayoutContent>
+</Layout>
+
+<Modal @ref="loginDialog" Closing="@PreventLoginDialogClose">
+    <ModalContent Centered="true">
+        <ModalHeader>
+            <ModalTitle>登入</ModalTitle>
+        </ModalHeader>
+        <ModalBody>
+            <Validations @ref="validators" Mode="ValidationMode.Manual">
+                <Validation Validator="@ValidationRule.IsEmail">
+                    <Field>
+                        <TextEdit @bind-Text="inputAccountID" Placeholder="帳號(信箱位址)" Role="TextRole.Text" @onkeyup="SaveLoginInfoByPressingEnter">
+                            <Feedback>
+                                <ValidationError>請輸入正確的信箱位址格式</ValidationError>
+                            </Feedback>
+                        </TextEdit>
+                    </Field>
+                </Validation>
+                <Validation Validator="@ValidatePassword">
+                    <Field>
+                        <TextEdit @bind-Text="inputVerificationCode" Placeholder="驗證碼(6位數字)" Role="TextRole.Password" @onkeyup="SaveLoginInfoByPressingEnter">
+                            <Feedback>
+                                <ValidationError>請輸入正確的驗證碼格式(6位數字)</ValidationError>
+                            </Feedback>
+                        </TextEdit>
+                    </Field>
+                </Validation>
+            </Validations>
+        </ModalBody>
+        <ModalFooter>
+            <Button Color="Color.Primary" Clicked="@(() => SaveLoginInfo())">確認</Button>
+        </ModalFooter>
+    </ModalContent>
+</Modal>
+
+<Modal @ref="longTextContentDialog">
+    <ModalContent Centered="true" Size="ModalSize.ExtraLarge">
+        <ModalHeader>
+            <ModalTitle>剪貼簿文字</ModalTitle>
+        </ModalHeader>
+        <ModalBody>
+            <MemoEdit @bind-Text="@longTextContent" Rows="15" />
+        </ModalBody>
+        <ModalFooter>
+            <Tooltip Text="複製到本地剪貼簿">
+                <Button Style="width:46px" Color="Color.Success" Clicked="@(() => CopyLongTextContentToLocalClipboard())" Loading="@isCopyLongTextContentButtonLoading">
+                    <LoadingTemplate>
+                        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true" />
+                    </LoadingTemplate>
+                    <ChildContent>
+                        <Icon Name="@("fa-clipboard")" />
+                    </ChildContent>
+                </Button>
+            </Tooltip>
+        </ModalFooter>
+    </ModalContent>
+</Modal>
+
+@code {
+    private HubConnection clipboardHubConn;
+    /// <summary>登入開窗</summary>
+    private Modal loginDialog;
+    /// <summary>長文字開窗</summary>
+    private Modal longTextContentDialog;
+    /// <summary>先前已儲存的帳號</summary>
+    private string savedAccountID = string.Empty;
+    /// <summary>先前已儲存的驗證碼</summary>
+    private string savedVerificationCode = string.Empty;
+    /// <summary>登入帳號</summary>
+    private string inputAccountID = string.Empty;
+    /// <summary>登入驗證碼</summary>
+    private string inputVerificationCode = string.Empty;
+    /// <summary>資料庫保留筆數</summary>
+    private readonly int reservedCount = 15;
+    /// <summary>剪貼簿紀錄列表</summary>
+    private List<ClipboardRecord> clipboardRecordList = new List<ClipboardRecord>();
+    private Validations validators;
+    /// <summary>"AccountID"</summary>
+        private readonly string storageAccountIDName = "AccountID";
+    /// <summary>"VerificationCode"</summary>
+    private readonly string storageVerificationCodeName = "VerificationCode";
+    private bool isLoggingIn { get { return !string.IsNullOrWhiteSpace(savedAccountID) && !string.IsNullOrWhiteSpace(savedVerificationCode); } }
+    private bool isLoggingOut { get { return !isLoggingIn; } }
+    private IFluentDisplayWithDisplayOnBreakpointWithDirection isLoggingInShowing { get { return isLoggingIn ? Display.Always : Display.None; } }
+    private IFluentDisplayWithDisplayOnBreakpointWithDirection hasNoDataShowing { get { return clipboardRecordList.Count == 0 ? Display.Always : Display.None; } }
+    private IFluentDisplayWithDisplayOnBreakpointWithDirection hasDataShowing { get { return clipboardRecordList.Count > 0 ?  Display.Always : Display.None; } }
+    private bool isPasteToCloudClipboardButtonLoading  = false;
+    private Dictionary<Guid, bool> isCopyToLocalClipboardButtonLoading = new Dictionary<Guid, bool>();
+    private bool isCopyLongTextContentButtonLoading = false;
+    private string longTextContent;
+
+    protected override async Task OnInitializedAsync() {
+        clipboardHubConn = new HubConnectionBuilder()
+            .WithUrl(NavigationManager.ToAbsoluteUri(ClipboardHub.HubPath),
+                options => {
+                    #region 避開SSL連線異常 https://stackoverflow.com/a/61905713/564709
+                    options.HttpMessageHandlerFactory = factory => new HttpClientHandler {
+                        ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => { return true; }
+                    };
+                    #endregion
+                }).Build();
+
+        clipboardHubConn.On<List<ClipboardRecord>>(ClipboardHub.ReceiveMethodName, (recordList) => {
+            clipboardRecordList = recordList;
+            clipboardRecordList.ForEach((c)=> {isCopyToLocalClipboardButtonLoading.TryAdd(c.RowID, false);});
+
+            StateHasChanged();
+        });
+
+        await clipboardHubConn.StartAsync();
+    }
+
+    public async Task Send(List<ClipboardRecord> recordList) =>
+        await clipboardHubConn.SendAsync(ClipboardHub.SendMethodName, recordList);
+
+    public bool IsConnected =>
+        clipboardHubConn.State == HubConnectionState.Connected;
+
+    public async ValueTask DisposeAsync() {
+        if (clipboardHubConn is not null) {
+            await clipboardHubConn.DisposeAsync();
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender) {
+        if (!firstRender) {
+            return;
+        }
+
+        savedAccountID = await localStorageService.GetItemAsync<string>(storageAccountIDName);
+        savedVerificationCode = await localStorageService.GetItemAsync<string>(storageVerificationCodeName);
+
+        if (isLoggingOut) {
+            loginDialog.Show();
+
+            return;
+        }
+
+        clipboardRecordList = GetClipboardRecordList(reservedCount);
+        clipboardRecordList.ForEach((c)=> {isCopyToLocalClipboardButtonLoading.TryAdd(c.RowID, false);});
+
+        StateHasChanged();
+    }
+
+    public void ShowLoginDialog() {
+        validators.ClearAll();
+        loginDialog.Show();
+
+        StateHasChanged();
+    }
+
+    public void ValidatePassword(ValidatorEventArgs e) {
+        var password = Convert.ToString(e.Value);
+        var validater = new Regex(@"^[0-9]{6}$");
+        e.Status = validater.IsMatch(password) ? ValidationStatus.Success : ValidationStatus.Error;
+    }
+
+    public async void SaveLoginInfo() {
+        if (validators.ValidateAll()) {
+            await localStorageService.SetItemAsync(storageAccountIDName, inputAccountID);
+            await localStorageService.SetItemAsync(storageVerificationCodeName, inputVerificationCode);
+
+            savedAccountID = inputAccountID;
+            savedVerificationCode = inputVerificationCode;
+            clipboardRecordList = GetClipboardRecordList(reservedCount);
+            clipboardRecordList.ForEach((c)=> {isCopyToLocalClipboardButtonLoading.TryAdd(c.RowID, false);});
+
+            StateHasChanged();
+            loginDialog.Hide();
+        }
+    }
+
+    private void PreventLoginDialogClose(CancelEventArgs e) {
+        if (isLoggingOut) {
+            e.Cancel = true;
+        }
+    }
+
+    private void ClearLoginInfo() {
+        localStorageService.RemoveItemAsync(storageAccountIDName);
+        localStorageService.RemoveItemAsync(storageVerificationCodeName);
+
+        savedAccountID = inputAccountID = string.Empty;
+        savedVerificationCode = inputVerificationCode = string.Empty;
+
+        clipboardRecordList.Clear();
+        isCopyToLocalClipboardButtonLoading.Clear();
+
+        StateHasChanged();
+        validators.ClearAll();
+        loginDialog.Show();
+    }
+
+    public async void PasteTextContentToCloudClipboard(){
+        isPasteToCloudClipboardButtonLoading = true;
+
+        var clipboardTextContent = await clipboardService.ReadTextAsync();
+
+        using var clipboardDB = new LiteDatabase(Clipboard.DBPath);
+        var clipboardTable = clipboardDB.GetCollection<Clipboard>(Clipboard.TableName);
+        var clipboardRow = new Clipboard() {
+            RowID = Guid.NewGuid(),
+            AccountID = savedAccountID,
+            VerificationCode = savedVerificationCode,
+            CreateDateTime = DateTime.Now,
+            TextContent = clipboardTextContent
+        };
+        clipboardTable.Insert(clipboardRow);
+
+        await Send(GetClipboardRecordList(reservedCount));
+
+        SpinWait.SpinUntil(() => false, 300);
+
+        isPasteToCloudClipboardButtonLoading = false;
+        StateHasChanged();
+    }
+
+    public async void CopyTextContentToLocalClipboard(ClipboardRecord clipboardRecord) {
+        isCopyToLocalClipboardButtonLoading[clipboardRecord.RowID] = true;
+
+        await clipboardService.WriteTextAsync(clipboardRecord.TextContent);
+
+        SpinWait.SpinUntil(() => false, 300);
+
+        isCopyToLocalClipboardButtonLoading[clipboardRecord.RowID] = false;
+        StateHasChanged();
+    }
+
+    public List<ClipboardRecord> GetClipboardRecordList(int reservedCount) {
+        using var clipboardDB = new LiteDatabase(Clipboard.DBPath);
+        var clipboardTable = clipboardDB.GetCollection<Clipboard>(Clipboard.TableName);
+
+        var deleteRecordDateTime = clipboardTable.Query().Where(c => c.AccountID == savedAccountID && c.VerificationCode == savedVerificationCode).OrderByDescending(c => c.CreateDateTime).Skip(reservedCount).ToList().Select(c=>c.CreateDateTime).DefaultIfEmpty(DateTime.MinValue).Max();
+        clipboardTable.DeleteMany(c => c.CreateDateTime <= deleteRecordDateTime);
+
+        var clipboardRecordList = clipboardTable.Query().Where(c => c.AccountID == savedAccountID && c.VerificationCode == savedVerificationCode).OrderByDescending(c => c.CreateDateTime).Select(c => new ClipboardRecord { CreateDateTime = c.CreateDateTime, TextContent = c.TextContent, RowID = c.RowID }).ToList();
+
+        return clipboardRecordList;
+    }
+
+    public void OpenLongTextContentDialog(ClipboardRecord clipboardRecord) {
+        longTextContent = clipboardRecord.TextContent;
+
+        longTextContentDialog.Show();
+    }
+
+    public async void CopyLongTextContentToLocalClipboard() {
+        isCopyLongTextContentButtonLoading = true;
+
+        await clipboardService.WriteTextAsync(longTextContent);
+
+        SpinWait.SpinUntil(() => false, 300);
+
+        isCopyLongTextContentButtonLoading = false;
+        StateHasChanged();
+        longTextContentDialog.Hide();
+    }
+
+    public void SaveLoginInfoByPressingEnter(KeyboardEventArgs eventArgs) {
+        if (eventArgs.Key != "Enter" ) {
+            return;
+        }
+
+        SaveLoginInfo();
+    }
+}
